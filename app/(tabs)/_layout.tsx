@@ -1,9 +1,10 @@
+// app/(tabs)_layout.tsx
 import { Tabs } from "expo-router";
 import React from "react";
 import { Platform } from "react-native";
+import Ionicons from "react-native-vector-icons/Ionicons";
 
 import { HapticTab } from "@/components/HapticTab";
-import { IconSymbol } from "@/components/ui/IconSymbol";
 import TabBarBackground from "@/components/ui/TabBarBackground";
 import { Colors } from "@/constants/Colors";
 import { useColorScheme } from "@/hooks/useColorScheme";
@@ -20,8 +21,7 @@ export default function TabLayout() {
         tabBarBackground: TabBarBackground,
         tabBarStyle: Platform.select({
           ios: {
-            // Use a transparent background on iOS to show the blur effect
-            position: "absolute",
+            position: "absolute", // transparent background for iOS
           },
           default: {},
         }),
@@ -32,7 +32,7 @@ export default function TabLayout() {
         options={{
           title: "Home",
           tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="house.fill" color={color} />
+            <Ionicons size={28} name="home-outline" color={color} />
           ),
         }}
       />
@@ -42,7 +42,7 @@ export default function TabLayout() {
         options={{
           title: "Control Panel",
           tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="paperplane.fill" color={color} />
+            <Ionicons size={28} name="settings-outline" color={color} />
           ),
         }}
       />
@@ -52,17 +52,7 @@ export default function TabLayout() {
         options={{
           title: "Music",
           tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="house.fill" color={color} />
-          ),
-        }}
-      />
-
-      <Tabs.Screen
-        name="OTAUpdate"
-        options={{
-          title: "OTA Updates",
-          tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="paperplane.fill" color={color} />
+            <Ionicons size={28} name="musical-notes-outline" color={color} />
           ),
         }}
       />
@@ -72,7 +62,37 @@ export default function TabLayout() {
         options={{
           title: "Product Showcase",
           tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="house.fill" color={color} />
+            <Ionicons size={28} name="pricetag-outline" color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="Connect"
+        options={{
+          title: "Connect",
+          tabBarIcon: ({ color }) => (
+            <Ionicons size={28} name="wifi-outline" color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="AnalyticsOverview"
+        options={{
+          title: "Analytics Overview",
+          tabBarIcon: ({ color }) => (
+            <Ionicons size={28} name="bar-chart-outline" color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="OTAUpdate"
+        options={{
+          title: "OTA Updates",
+          tabBarIcon: ({ color }) => (
+            <Ionicons size={28} name="cloud-download-outline" color={color} />
           ),
         }}
       />
