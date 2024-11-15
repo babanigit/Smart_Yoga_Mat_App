@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, NativeEventEmitter, NativeModule, Platform } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, NativeEventEmitter, NativeModule, Platform, ActivityIndicator } from 'react-native';
 import BleManager from 'react-native-ble-manager';
 import { PermissionsAndroid } from 'react-native';
 
@@ -8,166 +8,147 @@ interface BleManagerType extends NativeModule {
   checkState: () => Promise<string>;
   enableBluetooth: () => Promise<void>;
   scan: (services: string[], seconds: number, allowDuplicates: boolean) => void;
+  stopScan: () => Promise<void>;
   connect: (deviceId: string) => Promise<void>;
   disconnect: (deviceId: string) => Promise<void>;
+  getConnectedPeripherals: (services: string[]) => Promise<any[]>;
+}
+
+interface Device {
+  id: string;
+  name: string | null;
+  rssi: number;
 }
 
 const BleManagerModule = BleManager as unknown as BleManagerType;
 const bleManagerEmitter = new NativeEventEmitter(BleManagerModule);
 
+// Configuration
+const SCAN_TIMEOUT = 10; // seconds
+const RECONNECT_ATTEMPTS = 3;
+const EXPECTED_DEVICE_NAME = 'YogaMat'; // Replace with your device name
+const EXPECTED_SERVICE_UUID = ''; // Add your service UUID here
+
 export default function DeviceConnectionScreen() {
-  const [connectionStatus, setConnectionStatus] = useState<'Connected' | 'Disconnected' | 'Connecting' | 'Failed'>('Disconnected');
+  const [connectionStatus, setConnectionStatus] = useState<'Connected' | 'Disconnected' | 'Connecting' | 'Scanning' | 'Failed'>('Disconnected');
   const [bluetoothEnabled, setBluetoothEnabled] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [discoveredDevices, setDiscoveredDevices] = useState<Device[]>([]);
+  const [isScanning, setIsScanning] = useState(false);
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
+  const [isButtonDisabled, setIsButtonDisabled] = useState(false);
 
-  // Request permissions on Android
-  const requestPermissions = async () => {
-    if (Platform.OS === 'android' && Platform.Version >= 23) {
-      const granted = await PermissionsAndroid.requestMultiple([
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        ...(Platform.Version >= 31
-          ? [
-              PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-              PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-            ]
-          : []),
-      ]);
+  // ... (keep all the permission and initialization functions the same)
 
-      return Object.values(granted).every(
-        (permission) => permission === PermissionsAndroid.RESULTS.GRANTED
-      );
-    }
-    return true;
-  };
-
-  const initializeBluetooth = async () => {
+  const startScanning = async () => {
     try {
-      // Request permissions first
-      const permissionsGranted = await requestPermissions();
-      if (!permissionsGranted) {
-        Alert.alert('Permission Error', 'Required permissions were not granted');
-        return;
-      }
-
-      // Initialize BLE Manager
-      await BleManagerModule.start({ showAlert: false });
-
-      // Check initial state
-      const initialState = await BleManagerModule.checkState();
-      console.log('Initial Bluetooth state:', initialState);
-      setBluetoothEnabled(initialState === 'on');
-      setIsInitialized(true);
+      setIsScanning(true);
+      setConnectionStatus('Scanning');
+      setDiscoveredDevices([]);
+      await BleManagerModule.scan(EXPECTED_SERVICE_UUID ? [EXPECTED_SERVICE_UUID] : [], SCAN_TIMEOUT, true);
     } catch (error) {
-      console.error('Initialization error:', error);
-      Alert.alert('Error', 'Failed to initialize Bluetooth');
+      console.error('Scanning error:', error);
+      setIsScanning(false);
+      setConnectionStatus('Failed');
+      Alert.alert('Scanning Error', 'Failed to scan for devices');
     }
   };
-
-  useEffect(() => {
-    // Initialize when component mounts
-    initializeBluetooth();
-
-    // Set up event listeners
-    const listeners = [
-      bleManagerEmitter.addListener('BleManagerDidUpdateState', (args) => {
-        console.log('Bluetooth state updated:', args);
-        setBluetoothEnabled(args.state === 'on');
-      }),
-      bleManagerEmitter.addListener('BleManagerConnectPeripheral', (args) => {
-        console.log('Connected to device:', args);
-        setConnectionStatus('Connected');
-      }),
-      bleManagerEmitter.addListener('BleManagerDisconnectPeripheral', (args) => {
-        console.log('Disconnected from device:', args);
-        setConnectionStatus('Disconnected');
-      }),
-    ];
-
-    // Cleanup listeners
-    return () => {
-      listeners.forEach((listener) => listener.remove());
-    };
-  }, []);
 
   const handleConnect = async () => {
-    if (!isInitialized) {
-      Alert.alert('Please wait', 'Bluetooth is still initializing...');
-      return;
-    }
+    // Temporarily disable the button to prevent multiple clicks
+    setIsButtonDisabled(true);
 
-    if (!bluetoothEnabled) {
-      // Double-check Bluetooth state
-      const currentState = await BleManagerModule.checkState();
-      console.log('Double-checked Bluetooth state:', currentState);
-
-      if (currentState !== 'on') {
-        Alert.alert(
-          'Bluetooth Required',
-          'Please enable Bluetooth to connect to the mat.',
-          Platform.select({
-            android: [
-              {
-                text: 'Enable Bluetooth',
-                onPress: async () => {
-                  try {
-                    await BleManagerModule.enableBluetooth();
-                  } catch (error) {
-                    console.error('Error enabling Bluetooth:', error);
-                    Alert.alert('Error', 'Failed to enable Bluetooth. Please enable it manually.');
-                  }
-                },
-              },
-              { text: 'Cancel', style: 'cancel' },
-            ],
-            ios: [{ text: 'OK' }],
-          })
-        );
-        return;
-      } else {
-        // State was incorrect, update it
-        setBluetoothEnabled(true);
-      }
-    }
-
-    setConnectionStatus('Connecting');
     try {
-      // Start scanning for devices
-      BleManagerModule.scan([], 5, true); // Adjust the scan time and filter based on your needs
-      console.log('Started scanning for devices');
+      if (!bluetoothEnabled) {
+        const currentState = await BleManagerModule.checkState();
+        if (currentState !== 'on') {
+          Alert.alert(
+            'Bluetooth Required',
+            'Please enable Bluetooth to connect to the mat.',
+            Platform.select({
+              android: [
+                {
+                  text: 'Enable Bluetooth',
+                  onPress: async () => {
+                    try {
+                      await BleManagerModule.enableBluetooth();
+                      setBluetoothEnabled(true);
+                    } catch (error) {
+                      console.error('Error enabling Bluetooth:', error);
+                      Alert.alert('Error', 'Failed to enable Bluetooth. Please enable it manually.');
+                    } finally {
+                      setIsButtonDisabled(false);
+                    }
+                  },
+                },
+                { 
+                  text: 'Cancel', 
+                  style: 'cancel',
+                  onPress: () => setIsButtonDisabled(false)
+                },
+              ],
+              ios: [{ 
+                text: 'OK',
+                onPress: () => setIsButtonDisabled(false)
+              }],
+            })
+          );
+          return;
+        }
+      }
 
-      // Set up a timeout or mechanism to handle scanning results
-
-      // Your actual connection logic here
-      const isConnected = await mockConnectToYogaMat(); // Replace with real connection logic
-      setConnectionStatus(isConnected ? 'Connected' : 'Failed');
+      setConnectionStatus('Connecting');
+      
+      if (deviceId) {
+        await BleManagerModule.connect(deviceId);
+      } else {
+        await startScanning();
+      }
     } catch (error) {
       console.error('Connection error:', error);
       setConnectionStatus('Failed');
-      Alert.alert('Connection Failed', 'Please ensure Bluetooth is on and try again.');
+      Alert.alert('Connection Failed', 'Please ensure the device is nearby and try again.');
+    } finally {
+      // Re-enable the button after the operation completes
+      setIsButtonDisabled(false);
     }
   };
 
   const handleDisconnect = async () => {
     if (!deviceId) {
-      Alert.alert('No device connected', 'Please connect to a device first.');
       return;
     }
 
+    setIsButtonDisabled(true);
     try {
       await BleManagerModule.disconnect(deviceId);
-      setConnectionStatus('Disconnected');
       setDeviceId(null);
+      setDiscoveredDevices([]);
+      setConnectionStatus('Disconnected');
     } catch (error) {
       console.error('Disconnection error:', error);
       Alert.alert('Disconnection Error', 'Failed to disconnect. Please try again.');
+    } finally {
+      setIsButtonDisabled(false);
     }
   };
 
-  const mockConnectToYogaMat = async () => {
-    return new Promise<boolean>((resolve) =>
-      setTimeout(() => resolve(true), 2000)
-    );
+  // Update the connect to device function
+  const connectToDevice = async (device: Device) => {
+    setIsButtonDisabled(true);
+    try {
+      setConnectionStatus('Connecting');
+      await BleManagerModule.stopScan();
+      await BleManagerModule.connect(device.id);
+      setDeviceId(device.id);
+    } catch (error) {
+      console.error('Error connecting to device:', error);
+      setConnectionStatus('Failed');
+      Alert.alert('Connection Error', 'Failed to connect to the selected device.');
+    } finally {
+      setIsButtonDisabled(false);
+    }
   };
 
   return (
@@ -176,43 +157,97 @@ export default function DeviceConnectionScreen() {
 
       {!isInitialized && <Text style={styles.initText}>Initializing Bluetooth...</Text>}
 
-      <TouchableOpacity
-        style={[
-          styles.button,
-          connectionStatus === 'Connected' ? styles.disconnectButton : styles.connectButton,
-          (!isInitialized || connectionStatus === 'Connecting') && styles.disabledButton,
-        ]}
-        onPress={connectionStatus === 'Connected' ? handleDisconnect : handleConnect}
-        disabled={!isInitialized || connectionStatus === 'Connecting'}
-      >
-        <Text style={styles.buttonText}>
-          {connectionStatus === 'Connected' ? 'Disconnect from Mat' : 'Connect to Mat'}
-        </Text>
-      </TouchableOpacity>
-
       <View style={styles.statusContainer}>
-        <Text
-          style={[
-            styles.statusText,
-            connectionStatus === 'Connected'
-              ? styles.statusConnected
-              : connectionStatus === 'Connecting'
-              ? styles.statusConnecting
-              : connectionStatus === 'Failed'
-              ? styles.statusFailed
-              : styles.statusDisconnected,
-          ]}
-        >
+        <Text style={[styles.statusText, getStatusStyle(connectionStatus)]}>
           {connectionStatus}
         </Text>
-
         <Text style={styles.bluetoothStatus}>
           Bluetooth: {bluetoothEnabled ? 'Enabled' : 'Disabled'}
         </Text>
       </View>
+
+      {isScanning && (
+        <View style={styles.scanningContainer}>
+          <ActivityIndicator size="large" color="#4CAF50" />
+          <Text style={styles.scanningText}>Scanning for devices...</Text>
+        </View>
+      )}
+
+      {discoveredDevices.length > 0 && connectionStatus !== 'Connected' && (
+        <View style={styles.deviceList}>
+          <Text style={styles.deviceListTitle}>Available Devices:</Text>
+          {discoveredDevices.map((device) => (
+            <TouchableOpacity
+              key={device.id}
+              style={[
+                styles.deviceItem,
+                isButtonDisabled && styles.disabledButton
+              ]}
+              onPress={() => connectToDevice(device)}
+              disabled={isButtonDisabled}
+            >
+              <Text style={styles.deviceName}>{device.name || 'Unknown Device'}</Text>
+              <Text style={styles.deviceInfo}>Signal: {device.rssi} dBm</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      <TouchableOpacity
+        style={[
+          styles.button,
+          connectionStatus === 'Connected' ? styles.disconnectButton : styles.connectButton,
+          isButtonDisabled && styles.disabledButton,
+        ]}
+        onPress={connectionStatus === 'Connected' ? handleDisconnect : handleConnect}
+        disabled={isButtonDisabled}
+        activeOpacity={0.7}
+      >
+        <Text style={[
+          styles.buttonText,
+          isButtonDisabled && styles.disabledButtonText
+        ]}>
+          {connectionStatus === 'Connected' 
+            ? 'Disconnect from Mat' 
+            : connectionStatus === 'Scanning' 
+              ? 'Scanning...' 
+              : 'Connect to Mat'}
+        </Text>
+      </TouchableOpacity>
+
+      {/* Debug button - Remove in production */}
+      <TouchableOpacity 
+        style={styles.debugButton}
+        onPress={() => {
+          console.log('Debug Info:', {
+            connectionStatus,
+            bluetoothEnabled,
+            isInitialized,
+            isButtonDisabled,
+            deviceId,
+            discoveredDevices
+          });
+        }}
+      >
+        <Text style={styles.debugButtonText}>Show Debug Info</Text>
+      </TouchableOpacity>
     </View>
   );
 }
+
+const getStatusStyle = (status: string) => {
+  switch (status) {
+    case 'Connected':
+      return styles.statusConnected;
+    case 'Connecting':
+    case 'Scanning':
+      return styles.statusConnecting;
+    case 'Failed':
+      return styles.statusFailed;
+    default:
+      return styles.statusDisconnected;
+  }
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -237,6 +272,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 25,
     borderRadius: 25,
     marginBottom: 20,
+    minWidth: 200,
+    alignItems: 'center',
   },
   connectButton: {
     backgroundColor: '#4CAF50',
@@ -246,14 +283,18 @@ const styles = StyleSheet.create({
   },
   disabledButton: {
     opacity: 0.5,
+    backgroundColor: '#cccccc',
   },
   buttonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
   },
+  disabledButtonText: {
+    color: '#999999',
+  },
   statusContainer: {
-    marginTop: 20,
+    marginBottom: 20,
     alignItems: 'center',
   },
   statusText: {
@@ -277,5 +318,56 @@ const styles = StyleSheet.create({
   statusDisconnected: {
     color: 'gray',
   },
+  scanningContainer: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  scanningText: {
+    marginTop: 10,
+    color: '#666',
+  },
+  deviceList: {
+    width: '100%',
+    marginBottom: 20,
+  },
+  deviceListTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    color: '#333',
+  },
+  deviceItem: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 10,
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  deviceName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  deviceInfo: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 5,
+  },
+  debugButton: {
+    marginTop: 20,
+    padding: 10,
+    backgroundColor: '#eee',
+    borderRadius: 5,
+  },
+  debugButtonText: {
+    color: '#666',
+    fontSize: 12,
+  },
 });
-
